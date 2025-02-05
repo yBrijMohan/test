@@ -1,0 +1,59 @@
+@Configuration
+public class SecurityConfiguration {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SecurityConfiguration.class);
+    private final UserRepository userRepository;
+
+    public SecurityConfiguration(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+
+    public String getAuthenticatedEntity() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication != null && authentication.isAuthenticated()) {
+            return authentication.getName(); // For logged-in users
+        }
+
+        LOG.warn("Authentication is null. Assuming client credentials flow.");
+        return "eficaas-client"; // Default client ID for external API calls
+    }
+
+    @Bean
+    public OAuth2PrincipalCustomizer grantActuatorRole() {
+        return (OAuth2AuthenticatedPrincipal principal) -> {
+            if (principal == null || principal.getAttributes() == null) {
+                LOG.debug("No principal found, returning as is.");
+                return principal;
+            }
+
+            String username = getAuthenticatedEntity();
+            Collection<GrantedAuthority> authorities = new ArrayList<>(principal.getAuthorities());
+
+            if (username.equals("eficaas-client")) {
+                return principal; // No user roles for client credentials
+            }
+
+            User user = userRepository.findByEmailIgnoreCase(username.toLowerCase());
+            if (user == null) {
+                LOG.debug("No Authorities for {}", username);
+                return principal;
+            }
+
+            LOG.debug("Retrieve user authorities for: {} and igg: {}", username, user.getIgg());
+            Set<Profile> profiles = user.getProfiles();
+
+            for (Profile p : profiles) {
+                for (Role r : p.getRoles()) {
+                    authorities.add(new SimpleGrantedAuthority(r.getRoleName()));
+                }
+            }
+
+            if (Boolean.TRUE.equals(user.isSuperAdmin())) {
+                authorities.add(new SimpleGrantedAuthority("SUPER_ADMIN"));
+            }
+
+            return new DefaultOAuth2AuthenticatedPrincipal(principal.getName(), principal.getAttributes(), authorities);
+        };
+    }
+}
